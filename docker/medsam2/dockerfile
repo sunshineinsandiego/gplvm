@@ -1,0 +1,101 @@
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    ffmpeg \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Miniconda
+ARG TARGETARCH
+ENV CONDA_DIR=/opt/conda
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"; \
+    else \
+        MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh"; \
+    fi && \
+    curl -fsSL "$MINICONDA_URL" -o /tmp/miniconda.sh && \
+    /bin/bash /tmp/miniconda.sh -b -p $CONDA_DIR && \
+    rm -f /tmp/miniconda.sh
+ENV PATH=$CONDA_DIR/bin:$PATH
+
+# Accept Anaconda Terms of Service (if available)
+RUN if conda tos -h >/dev/null 2>&1; then \
+      conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+      conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r ; \
+    fi
+
+# Create environment
+RUN conda create -n medsam2 python=3.12 -y
+
+# Install PyTorch + deps in env
+SHELL ["conda", "run", "-n", "medsam2", "/bin/bash", "-c"]
+RUN python -m pip install --no-cache-dir --upgrade pip
+RUN python -m pip install --no-cache-dir \
+    pydicom \
+    pylibjpeg \
+    pylibjpeg-libjpeg \
+    pylibjpeg-openjpeg
+RUN python -m pip install --no-cache-dir torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+RUN python -m pip install --no-cache-dir opencv-python-headless
+RUN python -m pip install --no-cache-dir jupyterlab
+RUN python -m pip install --no-cache-dir scikit-learn umap-learn
+
+
+# Clone MedSAM2 and install
+ARG MEDSAM2_REF=332f30d420f1d1b08e2a79b3ae6a602458808383
+RUN git clone https://github.com/bowang-lab/MedSAM2.git /opt/MedSAM2
+WORKDIR /opt/MedSAM2
+RUN git checkout ${MEDSAM2_REF}
+RUN python - <<'PY'
+from pathlib import Path
+import re
+
+config_path = Path("/opt/MedSAM2/sam2/configs/sam2.1_hiera_t512.yaml")
+if not config_path.exists():
+    raise FileNotFoundError(f"Config not found: {config_path}")
+
+text = config_path.read_text()
+if "use_high_res_features_in_sam" in text:
+    text = re.sub(
+        r"^([ \\t]*)use_high_res_features_in_sam:.*$",
+        r"\1use_high_res_features_in_sam: true",
+        text,
+        flags=re.MULTILINE,
+    )
+else:
+    lines = text.splitlines()
+    inserted = False
+    for idx, line in enumerate(lines):
+        if re.match(r"^[ \\t]*model:\\s*$", line):
+            indent = re.match(r"^([ \\t]*)", line).group(1)
+            lines.insert(idx + 1, f"{indent}  use_high_res_features_in_sam: true")
+            inserted = True
+            break
+    if not inserted:
+        lines.append("")
+        lines.append("model:")
+        lines.append("  use_high_res_features_in_sam: true")
+    text = "\n".join(lines)
+
+config_path.write_text(text)
+PY
+RUN python -m pip install --no-cache-dir -e ".[dev]"
+
+ENV MEDSAM2_ROOT=/opt/MedSAM2
+ENV PYTHONPATH=/opt/MedSAM2:$PYTHONPATH
+
+# Checkpoints are mounted from host via docker-compose
+RUN mkdir -p /opt/MedSAM2/checkpoints
+
+# Auto-activate conda env for interactive shells
+RUN echo 'source /opt/conda/etc/profile.d/conda.sh' >> /root/.bashrc && \
+    echo 'conda activate medsam2' >> /root/.bashrc
+
+WORKDIR /workspace
+ENTRYPOINT ["/bin/bash", "-c", "source /opt/conda/etc/profile.d/conda.sh && conda activate medsam2 && cd /workspace && if [ $# -eq 0 ] || [ \"$1\" = \"/bin/bash\" ]; then exec /bin/bash -i; else exec \"$@\"; fi", "--"]
+CMD ["/bin/bash"]

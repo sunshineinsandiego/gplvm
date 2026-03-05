@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  dinov3:
+    image: dinov3:latest
+    container_name: gplvm_dinov3
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      # The repo directory is now strictly mapped so weights aren't downloaded every time
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    # Keep container alive for execution via `docker exec`
+    command: tail -f /dev/null
+
+  gpytorch:
+    image: pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+    container_name: gplvm_gpytorch
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    command: tail -f /dev/null

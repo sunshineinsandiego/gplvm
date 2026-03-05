@@ -1,0 +1,80 @@
+1. UMAP 3D (spatial tracker deformation during video, key frames by frame into Umap, then by outcome, still frames, loaded frames, etc)
+2. Classification with linear probe and attention
+
+Add HEIGHT, WEIGHT, POS as predictors in combination
+See if clusters align with patellar tendon thickness
+See if clusters align with VISA score (0-10, 10-20, 20-30, 30-40, 40-50, 50-60, 60-70, etc.)
+
+Outcomes:
+VISA Score at Preseason / Midseason / Postseason (VPRE, VMID, VPOST)
+-change in visa score from pre to mid, mid to post, pre to post
+SYMP at preason
+PTPRE, PTMID, PTPOST
+- Patellar tendon tenderness
+TTPRE, TTMID, TTPOST
+- Tibial tubercle tenderness
+ATPRE, ATMID, ATPOST
+- Axial thickness at Preseason / Midseason / Postseason
+- change in axial thickness from pre to mid, mid to post, pre to post
+
+Legend for data sheet
+ATHLETE - athlete identifier 
+TEAM - 1 = Columbia, 2 = Fordham
+FULLDATA = Athletes that were included (0 = value implies athlete was excluded from study; reasons for exclusion in excel sheet + manuscript)
+FULLHEALTH = Included athletes that were deemed “asymptomatic” (definition in manuscript)
+FULLNOHE = included athletes who did not have a hypo echoic region at preseason eval 
+Gender  (1=M, 0=F)
+HEIGHT
+WEIGHT
+BMI
+AGE
+POS = position (1 = guard, 2 = forward or center)
+Year in School
+YEARS (years of experience playing basketball)
+YEARS SPECIALIZED (years of playing ONLY basketball, i.e. early sports specialization) 
+JUMPHX = athlete reported history of patellar tendinopathy/
+SHX = Prior knee surgery
+OS = Osgood schlatter history? 
+VPRE = VISA score at preseason 
+PTPRE = proximal patellar tendon tenderness at preseason? 
+TTPRE = tibial tubercle tenderness at preseason?  
+SYMP = symptomatic at preason eval (definition in manuscript) 
+HEPRE = hypo echoic region at preseason eval? 
+ATS1R1PRE = patellar tendon axial thickness from slice 1 from preseason eval, as rated by reviewer one
+ATS2R1PRE  = patellar tendon axial thickness from slice 2 from preseason eval, as rated by reviewer one
+ATS2R1PRE = patellar tendon axial thickness from slice 1 from preseason eval, as rated by reviewer two
+ATS2R2PRE = patellar tendon axial thickness from slice 2 from preseason eval, as rated by reviewer two
+ATPRE= mean of 4x axial thickness measurements at preseason time point 
+VMID = “ “ midseason
+PTMID
+TTMID
+HEMID
+ATS1R1MID
+ATS2R1MID
+ATS2R1MID
+ATS2R2MID
+ATMID
+VPOST
+PTPOST
+TTPOST
+HEPOST
+ATS1R1POST
+ATS2R1POST
+ATS2R1POST
+ATS2R2POST
+ATPOST
+TTR = trip to the training room during season? 
+TLPT = missed game due to patellar tendinopathy during the season? 
+T1145 = tendon thickness ≥ 11.45mm at midseason or postseason eval? 
+V80 = VISA score ≤80 at midseason or postseason eval? 
+V70 = VISA score ≤70 at midseason or postseason eval? 
+delta Pre to Mid = Visa score change from pre to midseason
+delta Pre to Post = Visa score change from pre to postseason
+DV13 = Was there a decrease in VISA score ≥13 from pre to mid OR from pre to postseason? (13 is the MCID for VISA score)
+HE = Hypoechoic region at midseason OR postseason eval?
+
+The following values I copy pasted from “ATS1R1…” from all time points to calculate intra and interobserver reliability. I would ignore these columns as they are redundant data points
+ATINTER1
+ATINTER2
+ATINTRA1
+ATINTRA2

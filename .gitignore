@@ -1,0 +1,9 @@
+*.pth
+*.pt
+*.npy
+*.npy
+*.pt
+*.dcm
+*.DS_Store
+*.pyc
+*.pycache__

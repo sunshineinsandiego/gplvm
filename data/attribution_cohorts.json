@@ -1,0 +1,248 @@
+{
+  "1_longitudinal_post_v_pre_L": {
+    "target": [
+      "T1-3.3/L",
+      "T1-20.3/L",
+      "T1-35.3/L",
+      "T1-24.3/L"
+    ],
+    "rival": [
+      "T1-20.1/L",
+      "T1-35.1/L",
+      "T1-24.1/L",
+      "T1-3.1/L"
+    ],
+    "require_video_frames": false
+  },
+  "1_longitudinal_post_v_pre_R": {
+    "target": [
+      "T1-3.3/R",
+      "T1-20.3/R",
+      "T1-35.3/R",
+      "T1-24.3/R"
+    ],
+    "rival": [
+      "T1-20.1/R",
+      "T1-35.1/R",
+      "T1-24.1/R",
+      "T1-3.1/R"
+    ],
+    "require_video_frames": false
+  },
+  "2_symptomatic_all": {
+    "target": [],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-3.3/L",
+      "T1-3.3/R",
+      "T1-20.3/L",
+      "T1-20.3/R",
+      "T1-24.2/L",
+      "T1-24.2/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-24.1/L",
+      "T1-24.1/R",
+      "T1-35.3/L",
+      "T1-35.3/R",
+      "T1-3.2/L",
+      "T1-3.2/R",
+      "T1-35.2/L",
+      "T1-35.2/R",
+      "T1-20.2/L",
+      "T1-20.2/R",
+      "T1-24.3/L",
+      "T1-24.3/R",
+      "T1-3.1/L",
+      "T1-3.1/R"
+    ],
+    "require_video_frames": false
+  },
+  "2_symptomatic_pre": {
+    "target": [],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-24.1/L",
+      "T1-24.1/R",
+      "T1-3.1/L",
+      "T1-3.1/R"
+    ],
+    "require_video_frames": false
+  },
+  "2_symptomatic_mid": {
+    "target": [],
+    "rival": [
+      "T1-24.2/L",
+      "T1-24.2/R",
+      "T1-3.2/L",
+      "T1-3.2/R",
+      "T1-35.2/L",
+      "T1-35.2/R",
+      "T1-20.2/L",
+      "T1-20.2/R"
+    ],
+    "require_video_frames": false
+  },
+  "2_symptomatic_post": {
+    "target": [],
+    "rival": [
+      "T1-3.3/L",
+      "T1-3.3/R",
+      "T1-20.3/L",
+      "T1-20.3/R",
+      "T1-35.3/L",
+      "T1-35.3/R",
+      "T1-24.3/L",
+      "T1-24.3/R"
+    ],
+    "require_video_frames": false
+  },
+  "4_silent_pathology": {
+    "target": [],
+    "rival": [
+      "T1-3.3/R",
+      "T1-24.2/R",
+      "T1-35.3/L",
+      "T1-35.3/R",
+      "T1-35.2/R",
+      "T1-24.3/L",
+      "T1-24.3/R"
+    ],
+    "require_video_frames": false
+  },
+  "4_predictive_injury": {
+    "target": [],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-24.1/L",
+      "T1-24.1/R",
+      "T1-3.1/L",
+      "T1-3.1/R"
+    ],
+    "require_video_frames": false
+  },
+  "4_clinical_crash_predictor": {
+    "target": [
+      "T1-24.1/R"
+    ],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-24.1/L",
+      "T1-3.1/L",
+      "T1-3.1/R"
+    ],
+    "require_video_frames": false
+  },
+  "4_severity_gradient": {
+    "target": [
+      "T1-24.2/L",
+      "T1-24.2/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-24.1/L",
+      "T1-35.3/L",
+      "T1-35.3/R",
+      "T1-35.2/R",
+      "T1-3.1/L"
+    ],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-20.3/L",
+      "T1-20.3/R",
+      "T1-24.1/R",
+      "T1-20.2/L",
+      "T1-20.2/R",
+      "T1-24.3/L",
+      "T1-24.3/R"
+    ],
+    "require_video_frames": false
+  },
+  "4_osgood_schlatter": {
+    "target": [
+      "T1-24.2/L",
+      "T1-24.2/R",
+      "T1-24.1/L",
+      "T1-24.1/R",
+      "T1-24.3/L",
+      "T1-24.3/R"
+    ],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-3.3/L",
+      "T1-3.3/R",
+      "T1-20.3/L",
+      "T1-20.3/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-35.3/L",
+      "T1-35.3/R",
+      "T1-3.2/L",
+      "T1-3.2/R",
+      "T1-35.2/L",
+      "T1-35.2/R",
+      "T1-20.2/L",
+      "T1-20.2/R",
+      "T1-3.1/L",
+      "T1-3.1/R"
+    ],
+    "require_video_frames": false
+  },
+  "5_healthy_adaptation": {
+    "target": [],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-20.3/L",
+      "T1-20.3/R",
+      "T1-24.2/R",
+      "T1-24.1/R",
+      "T1-20.2/L",
+      "T1-20.2/R",
+      "T1-24.3/R"
+    ],
+    "require_video_frames": false
+  },
+  "5_positional_guards_v_bigs": {
+    "target": [
+      "T1-3.3/L",
+      "T1-3.3/R",
+      "T1-3.2/L",
+      "T1-3.2/R",
+      "T1-3.1/L",
+      "T1-3.1/R"
+    ],
+    "rival": [
+      "T1-20.1/L",
+      "T1-20.1/R",
+      "T1-20.3/L",
+      "T1-20.3/R",
+      "T1-24.2/L",
+      "T1-24.2/R",
+      "T1-35.1/L",
+      "T1-35.1/R",
+      "T1-24.1/L",
+      "T1-24.1/R",
+      "T1-35.3/L",
+      "T1-35.3/R",
+      "T1-35.2/L",
+      "T1-35.2/R",
+      "T1-20.2/L",
+      "T1-20.2/R",
+      "T1-24.3/L",
+      "T1-24.3/R"
+    ],
+    "require_video_frames": false
+  }
+}
