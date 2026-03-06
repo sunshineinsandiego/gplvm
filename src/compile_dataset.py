@@ -5,6 +5,8 @@ import json
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import subprocess
+import tempfile
 import argparse
 
 def parse_scan_directories(scan_dir):
@@ -64,6 +66,11 @@ def aggregate_game_stats(team, player, timepoint, game_stats_df):
         "AVG_REB": 0.0,
         "AVG_AST": 0.0,
         "AVG_PLUS_MINUS": 0.0,
+        "TOT_MIN": 0.0,
+        "TOT_PTS": 0.0,
+        "TOT_REB": 0.0,
+        "TOT_AST": 0.0,
+        "TOT_PLUS_MINUS": 0.0,
         "GP": 0 # Games played
     }
     
@@ -114,16 +121,27 @@ def aggregate_game_stats(team, player, timepoint, game_stats_df):
     avg_ast = pd.to_numeric(player_games['Ast'], errors='coerce').mean()
     avg_pm = pd.to_numeric(player_games['+/-'], errors='coerce').mean()
     
+    tot_min = player_games['Min_float'].sum()
+    tot_pts = pd.to_numeric(player_games['Pts'], errors='coerce').sum()
+    tot_reb = pd.to_numeric(player_games['Tot Reb'], errors='coerce').sum()
+    tot_ast = pd.to_numeric(player_games['Ast'], errors='coerce').sum()
+    tot_pm = pd.to_numeric(player_games['+/-'], errors='coerce').sum()
+    
     return {
         "AVG_MIN": float(avg_min) if not pd.isna(avg_min) else 0.0,
         "AVG_PTS": float(avg_pts) if not pd.isna(avg_pts) else 0.0,
         "AVG_REB": float(avg_reb) if not pd.isna(avg_reb) else 0.0,
         "AVG_AST": float(avg_ast) if not pd.isna(avg_ast) else 0.0,
         "AVG_PLUS_MINUS": float(avg_pm) if not pd.isna(avg_pm) else 0.0,
+        "TOT_MIN": float(tot_min),
+        "TOT_PTS": float(tot_pts),
+        "TOT_REB": float(tot_reb),
+        "TOT_AST": float(tot_ast),
+        "TOT_PLUS_MINUS": float(tot_pm),
         "GP": len(player_games)
     }
 
-def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encoder, embeddings_dir):
+def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encoder, n_keyframes):
     """
     Executes Steps 1 and 2 of the dataset compilation pipeline.
     Parses scans, extracts static patient info, targets based on timepoint, 
@@ -145,7 +163,6 @@ def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encode
     
     merged_rows = []
     skipped_patient = 0
-    skipped_no_dpp = 0
     
     for _, scan in scans_df.iterrows():
         ppt_key = scan['ppt_key']
@@ -184,6 +201,12 @@ def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encode
             row['TT_TEND'] = patient_info.get(f'TT{time_prefix}', np.nan)
             row['HE'] = patient_info.get(f'HE{time_prefix}', np.nan)
             row['AT_THICK'] = patient_info.get(f'AT{time_prefix}', np.nan)
+            
+            # Include specific requested variables
+            row['SYMP'] = patient_info.get('SYMP', np.nan)
+            row['HEPRE'] = patient_info.get('HEPRE', np.nan)
+            row['HEMID'] = patient_info.get('HEMID', np.nan)
+            row['HEPOST'] = patient_info.get('HEPOST', np.nan)
         else:
             # Fallback if unknown timepoint
             row['V_SCORE'] = np.nan
@@ -191,6 +214,10 @@ def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encode
             row['TT_TEND'] = np.nan
             row['HE'] = np.nan
             row['AT_THICK'] = np.nan
+            row['SYMP'] = np.nan
+            row['HEPRE'] = np.nan
+            row['HEMID'] = np.nan
+            row['HEPOST'] = np.nan
             
         # 3. Game stats aggregation
         # Team 1 = CU (game_stats_CU.csv), Team 2 = FD (game_stats_FD.csv)
@@ -201,89 +228,57 @@ def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encode
         for k, v in game_aggs.items():
             row[k] = v
             
-        # 4. Filter by DPP keyframes
-        subject_id = f"T{scan['team']}-{scan['player']}.{scan['timepoint']}"
-        knee_id = scan['knee']
-        search_path = os.path.join(embeddings_dir, subject_id, knee_id, encoder, "*", "selected_keyframes_dpp.json")
-        json_files = glob.glob(search_path)
+        # 4. Run Feature Extraction & DPP Selection on the fly
+        # We use a temporary directory to capture the JSON output from the feature extractor
+        selected_frames = []
         
-        if not json_files:
-            # Check if features are extracted at all
-            encoder_dir = os.path.join(embeddings_dir, subject_id, knee_id, encoder)
-            if not os.path.exists(encoder_dir) or not os.listdir(encoder_dir):
-                print(f"Extracting {encoder} features for {scan['scan_path']} on the fly...")
-                workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                rel_scan_path = os.path.relpath(scan['scan_path'], workspace_dir)
-                import subprocess
-                # If it's a video/multiframe, ask for 10 keyframes. If it's a single image, features_dinov3 
-                # will just return 1 frame and DPP will gracefully accept it.
-                import sys
-                cmd = [
-                    sys.executable, f"{workspace_dir}/src/features_{encoder}.py",
-                    "--input", f"{workspace_dir}/{rel_scan_path}",
-                    "--output-root", f"{workspace_dir}/{embeddings_dir}",
-                    "--save-encodings", "false",
-                    "--frame-index", "all",
-                    "--dpp-keyframes", "10"
-                ]
-                try:
-                    subprocess.run(cmd, check=True, capture_output=True, text=True)
-                    json_files = glob.glob(search_path)
-                except subprocess.CalledProcessError as e:
-                    print(f"Error extracting features: {e.stderr}")
-
-            # If JSON is still not found, try generating it on the fly via the old method
-            if not json_files and os.path.exists(encoder_dir):
-                # We need to find the specific subset directory (e.g., 'all' or 'idx0')
-                subsets = [d for d in os.listdir(encoder_dir) if os.path.isdir(os.path.join(encoder_dir, d))]
-                
-                if subsets:
-                    subset_dir = os.path.join(encoder_dir, subsets[0])
-                    print(f"Generating DPP keyframes on the fly for {subset_dir}...")
-                    
-                    # Convert absolute paths to workspace relative paths
-                    workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                    rel_subset_dir = os.path.relpath(subset_dir, workspace_dir)
-                    
-                    # Run python command
-                    import subprocess
-                    import sys
-                    cmd = [
-                        sys.executable, f"{workspace_dir}/src/select_keyframes_dpp.py",
-                        "--input", f"{workspace_dir}/{rel_subset_dir}"
-                    ]
-                    
-                    try:
-                        subprocess.run(cmd, check=True, capture_output=True, text=True)
-                        json_files = glob.glob(search_path)
-                        if not json_files:
-                            print(f"Warning: Script succeeded but {search_path} still not found.")
-                    except subprocess.CalledProcessError as e:
-                        print(f"Error generating keyframes for {subset_dir}: {e.stderr}")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            print(f"Processing {scan['scan_path']} (DPP selection)...")
+            workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            rel_scan_path = os.path.relpath(scan['scan_path'], workspace_dir)
             
-        if not json_files:
-            skipped_no_dpp += 1
-            # Still output the row without a frame_id just in case, but typically we want per-frame
-            # Let's emit a single row to permit testing functionality when DP isn't run
+            import sys
+            cmd = [
+                sys.executable, f"{workspace_dir}/src/features_{encoder}.py",
+                "--input", f"{workspace_dir}/{rel_scan_path}",
+                "--output-root", temp_dir,
+                "--save-encodings", "false",     # Do NOT save .npy files
+                "--save-pre-encoder", "false",
+                "--frame-index", "all",
+                "--dpp-keyframes", str(n_keyframes)
+            ]
+            
+            try:
+                # Run the extractor. It will write selected_keyframes_dpp.json to temp_dir/...
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                
+                # Find the JSON file. It will be nested under temp_dir/Subject/Knee/encoder/subset/
+                json_files = glob.glob(os.path.join(temp_dir, "**", "selected_keyframes_dpp.json"), recursive=True)
+                
+                if json_files:
+                    with open(json_files[0], 'r') as f:
+                        dpp_data = json.load(f)
+                    selected_frames = dpp_data.get("selected_frame_ids", [])
+                else:
+                    print(f"Warning: No DPP JSON generated for {scan['scan_path']}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error extracting features for {scan['scan_path']}: {e.stderr}")
+
+        if not selected_frames:
+            # Fallback: emit one row with no frame_id if extraction failed or no frames found
             frame_row = row.copy()
             frame_row['frame_id'] = None
             frame_row['embedding_dir'] = None
             merged_rows.append(frame_row)
             continue
             
-        with open(json_files[0], 'r') as f:
-            dpp_data = json.load(f)
-            
-        selected_frames = dpp_data.get("selected_frame_ids", [])
-        
         for frame_id in selected_frames:
             frame_row = row.copy()
             frame_row['frame_id'] = frame_id
-            frame_row['embedding_dir'] = os.path.dirname(json_files[0])
             merged_rows.append(frame_row)
             
     final_df = pd.DataFrame(merged_rows)
-    print(f"Successfully joined {len(final_df)} scan records to tabular data. Skipped {skipped_patient} missing tabulars. Scans missing DPP JSON tracking: {skipped_no_dpp}")
+    print(f"Successfully joined {len(final_df)} scan records to tabular data. Skipped {skipped_patient} missing tabulars.")
     return final_df
 
 if __name__ == "__main__":
@@ -293,20 +288,18 @@ if __name__ == "__main__":
     parser.add_argument("--cu_csv", type=str, default="data/game_stats_CU.csv", help="Path to game_stats_CU.csv")
     parser.add_argument("--fd_csv", type=str, default="data/game_stats_FD.csv", help="Path to game_stats_FD.csv")
     parser.add_argument("--encoder", type=str, choices=["dinov3", "medsam2"], default="dinov3", help="Encoder used (dinov3 or medsam2)")
-    parser.add_argument("--embeddings_dir", type=str, default="scan_output", help="Directory where embeddings are saved")
+    parser.add_argument("--n_keyframes", type=int, default=10, help="Number of keyframes to select per video (default: 10)")
     parser.add_argument("--out_manifest", type=str, default="data/manifest.csv", help="Output path for manifest CSV")
-    parser.add_argument("--out_xtab", type=str, default="data/X_tab.npy", help="Output path for X_tab tensor")
-    parser.add_argument("--out_ytarget", type=str, default="data/Y_target.npy", help="Output path for Y_target tensor")
     
     args = parser.parse_args()
     
-    df = compile_tabular_data(args.scan_dir, args.ppt_csv, args.cu_csv, args.fd_csv, args.encoder, args.embeddings_dir)
+    df = compile_tabular_data(args.scan_dir, args.ppt_csv, args.cu_csv, args.fd_csv, args.encoder, args.n_keyframes)
     
     if not df.empty:
         static = ['HEIGHT', 'WEIGHT', 'BMI', 'AGE', 'POS', 'YEARS']
-        game = ['AVG_MIN', 'AVG_PTS', 'AVG_REB', 'AVG_AST', 'AVG_PLUS_MINUS', 'GP']
-        clinical = ['V_SCORE', 'PT_TEND', 'TT_TEND', 'HE', 'AT_THICK']
-        base = ['frame_id', 'scan_path', 'ppt_key', 'timepoint', 'team', 'player', 'knee', 'embedding_dir']
+        game = ['AVG_MIN', 'AVG_PTS', 'AVG_REB', 'AVG_AST', 'AVG_PLUS_MINUS', 'TOT_MIN', 'TOT_PTS', 'TOT_REB', 'TOT_AST', 'TOT_PLUS_MINUS', 'GP']
+        clinical = ['V_SCORE', 'PT_TEND', 'TT_TEND', 'HE', 'AT_THICK', 'SYMP', 'HEPRE', 'HEMID', 'HEPOST']
+        base = ['frame_id', 'scan_path', 'ppt_key', 'timepoint', 'team', 'player', 'knee']
         
         # Verify columns exist
         existing_cols = [c for c in base + static + game + clinical if c in df.columns]
@@ -315,16 +308,7 @@ if __name__ == "__main__":
         print("\nPreview of Compiled Tabular Row (idx 0):")
         print(df.iloc[0].to_dict())
         
-        # Form X_tab and Y_target
-        X_tab = df[[c for c in static + game if c in df.columns]].values.astype(np.float32)
-        Y_target = df[[c for c in clinical if c in df.columns]].values.astype(np.float32)
-        
-        np.save(args.out_xtab, X_tab)
-        np.save(args.out_ytarget, Y_target)
         df.to_csv(args.out_manifest, index=False)
-        
-        print(f"\nSaved X_tab of shape {X_tab.shape} to {args.out_xtab}")
-        print(f"Saved Y_target of shape {Y_target.shape} to {args.out_ytarget}")
-        print(f"Saved manifest dataset to {args.out_manifest}")
+        print(f"\nSaved manifest dataset to {args.out_manifest}")
     else:
         print("Failed to compile dataset. DataFrame is empty.")

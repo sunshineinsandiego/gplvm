@@ -5,53 +5,92 @@ import pandas as pd
 import torch
 import gpytorch
 from torch.utils.data import Dataset, DataLoader
+from torchvision.transforms import v2
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from models.shared_gplvm import SharedVariationalGPLVM, create_multimodal_likelihoods
+from shared_gplvm import SharedVariationalGPLVM, create_multimodal_likelihoods
+from sequence_frame_loader import SequenceSource, load_selected_rgb_frame, source_frame_path
+# We import private functions from features_dinov3 to reuse preprocessing logic
+# Assuming src is in path
+from features_dinov3 import _preprocess, _extract_features
 
 class MultimodalDataset(Dataset):
     """
     On-the-fly dataset loading for Shared GPLVM training.
-    Loads the low-dimensional X_tab and Y_target directly into memory.
-    Lazy-loads the high-dimensional DINOv3 features using the manifest.csv 
-    to avoid OOM errors.
+    Loads the low-dimensional X_tab and Y_target directly from the manifest CSV.
+    Computes high-dimensional DINOv3 features on-the-fly from raw images/videos
+    to avoid saving massive embedding files.
     """
-    def __init__(self, manifest_path, xtab_path, ytarget_path, embeddings_dir="scan_output", encoder="dinov3"):
+    def __init__(self, manifest_path, encoder="dinov3", device="cuda"):
         self.manifest = pd.read_csv(manifest_path)
-        self.X_tab = np.load(xtab_path)       # Static Predictors
-        self.Y_target = np.load(ytarget_path) # Clinical Outcomes (the things with missingness)
-        self.embeddings_dir = embeddings_dir
+        
+        # Define columns to extract (matching compile_dataset.py)
+        static_cols = ['HEIGHT', 'WEIGHT', 'BMI', 'AGE', 'POS', 'YEARS']
+        game_cols = ['AVG_MIN', 'AVG_PTS', 'AVG_REB', 'AVG_AST', 'AVG_PLUS_MINUS', 'TOT_MIN', 'TOT_PTS', 'TOT_REB', 'TOT_AST', 'TOT_PLUS_MINUS', 'GP']
+        clinical_cols = ['V_SCORE', 'PT_TEND', 'TT_TEND', 'HE', 'AT_THICK', 'SYMP', 'HEPRE', 'HEMID', 'HEPOST']
+        
+        # Extract X_tab (Static + Game) and Y_target (Clinical)
+        xtab_cols = [c for c in static_cols + game_cols if c in self.manifest.columns]
+        ytarget_cols = [c for c in clinical_cols if c in self.manifest.columns]
+        
+        self.X_tab = self.manifest[xtab_cols].values.astype(np.float32)
+        self.Y_target = self.manifest[ytarget_cols].values.astype(np.float32)
+        
         self.encoder = encoder
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        
+        # Load Frozen Encoder
+        print(f"Loading {encoder} model to {self.device}...")
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dinov3"))
+        # Assuming weights are in standard location or env var
+        weights_path = os.environ.get("DINOV3_WEIGHTS", "/workspace/models/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth")
+        
+        self.model = torch.hub.load(
+            repo_dir, 
+            "dinov3_vits16", 
+            source="local", 
+            weights=weights_path
+        )
+        self.model.eval().to(self.device)
         
     def __len__(self):
         return len(self.manifest)
         
     def __getitem__(self, idx):
         row = self.manifest.iloc[idx]
-        subject_id = f"T{row['team']}-{row['player']}.{row['timepoint']}"
-        knee_id = row['knee']
         frame_id = row['frame_id']
+        scan_path = row['scan_path']
         
-        # We need to find the subset directory from the manifest or dynamically.
-        # Assuming frame_id contains the _fXXX suffix from output_stem.
-        encoder_dir = os.path.join(self.embeddings_dir, subject_id, knee_id, self.encoder)
+        # 1. Load Raw Frame
+        # Determine source type based on extension or directory structure
+        # SequenceSource expects a Path object
+        # We need to reconstruct the SequenceSource object to use load_selected_rgb_frame
+        # This is a bit hacky, ideally we'd persist source info, but we can infer it.
         
-        # Find the correct npy file. The subset logic might vary so we search.
-        feat_path = None
-        for root, _, files in os.walk(encoder_dir):
-            for file in files:
-                if frame_id in file and file.endswith(".npy") and "pre_encoder" not in file:
-                    feat_path = os.path.join(root, file)
-                    break
-            if feat_path: break
+        # Parse frame index from frame_id (e.g., "vid_f0045" -> 45)
+        try:
+            frame_idx_int = int(frame_id.split('_f')[-1])
+        except (ValueError, IndexError):
+            frame_idx_int = 0
             
-        if not feat_path:
-            raise FileNotFoundError(f"Feature vector for {frame_id} not found in {encoder_dir}")
-            
-        # 1. Image Embeddings (Y1)
-        # Assuming shape is (D1,) where D1 is e.g. 768 or 1024
-        img_feat = torch.from_numpy(np.load(feat_path)).float()
+        # Construct a temporary source object
+        # We assume scan_path points to the directory containing the media
+        source = SequenceSource(Path(scan_path), "unknown", 0, 0.0) # Type/count don't matter for loading specific frame if path is dir
+        
+        # Load and Preprocess
+        frame_rgb = load_selected_rgb_frame(source, frame_idx_int)
+        image_t = _preprocess(frame_rgb, 16, 0, 0, 0, 0, False) # No offsets, no imagenet norm (DINOv3 handles it?) 
+        # Note: features_dinov3.py _preprocess handles normalization if imagenet=True. 
+        # Default in features_dinov3.py is False.
+        
+        # Extract Features
+        # _extract_features returns [C, H, W]. We likely need to flatten it for GPLVM 
+        # or pool it. The user said "Each embedding is ~300MB", implying full map.
+        # However, standard GPLVM expects a vector. 
+        # For now, we return the flattened vector.
+        feat_map = _extract_features(self.model, image_t, self.device)
+        img_feat = feat_map.flatten().float()
         
         # 2. Tabular Features (Y2)
         # Concatenate X_tab and Y_target for the Shared observation space?
@@ -74,9 +113,9 @@ def train_shared_gplvm(args):
     # 1. Load Dataset
     print(f"Loading datasets from index: {args.manifest}")
     dataset = MultimodalDataset(
-        args.manifest, args.xtab, args.ytarget, 
-        embeddings_dir=args.embeddings_dir, 
-        encoder=args.encoder
+        args.manifest, 
+        encoder=args.encoder,
+        device=args.device
     )
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     N = len(dataset)
@@ -112,8 +151,8 @@ def train_shared_gplvm(args):
     # 4. Objective Function (Variational ELBO)
     # We sum the Evidence Lower Bounds of both modalities.
     # Note: VariationalELBO needs to know the total N to scale the KL divergence term properly when batching.
-    mll_img = gpytorch.mlls.VariationalELBO(likelihood_img, model, num_data=N)
-    mll_tab = gpytorch.mlls.VariationalELBO(likelihood_tab, model, num_data=N)
+    mll_img = gpytorch.mlls.VariationalELBO(likelihood_img, model.gp_img, num_data=N)
+    mll_tab = gpytorch.mlls.VariationalELBO(likelihood_tab, model.gp_tab, num_data=N)
     
     # 5. Training Loop
     model.train()
@@ -141,7 +180,11 @@ def train_shared_gplvm(args):
             loss_img = -mll_img(pred_img, Y1)
             loss_tab = -mll_tab(pred_tab, Y2)
             
-            loss = loss_img + loss_tab
+            # Add regularization for the latent space X (MAP estimation)
+            # This constrains X to stay close to the prior N(0, I)
+            loss_prior = model.latent_prior_loss()
+            
+            loss = loss_img + loss_tab + loss_prior
             loss.backward()
             optimizer.step()
             
@@ -164,9 +207,6 @@ def train_shared_gplvm(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Shared Variational GPLVM")
     parser.add_argument("--manifest", type=str, default="data/manifest.csv")
-    parser.add_argument("--xtab", type=str, default="data/X_tab.npy")
-    parser.add_argument("--ytarget", type=str, default="data/Y_target.npy")
-    parser.add_argument("--embeddings_dir", type=str, default="scan_output")
     parser.add_argument("--encoder", type=str, default="dinov3")
     parser.add_argument("--out_dir", type=str, default="models/checkpoints")
     

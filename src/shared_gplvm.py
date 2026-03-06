@@ -5,18 +5,16 @@ from gpytorch.models import ApproximateGP
 from gpytorch.variational import CholeskyVariationalDistribution, VariationalStrategy
 from gpytorch.means import ZeroMean
 from gpytorch.kernels import ScaleKernel, RBFKernel
+from gpytorch.distributions import MultivariateNormal, MultitaskMultivariateNormal
 from gpytorch.priors import NormalPrior
 
-class SharedVariationalGPLVM(ApproximateGP):
+class LatentGP(ApproximateGP):
     """
-    A Shared Variational Gaussian Process Latent Variable Model (vGPLVM).
-    Learns a joint low-dimensional latent space X from two modalities:
-    Y1 (High-dimensional Image Features) and Y2 (Low-dimensional Tabular Config).
+    A standard Variational GP that maps from Latent X -> Observed Y modality.
     """
-    def __init__(self, n_data, latent_dim, n_inducing=50, Y1_dim=None, Y2_dim=None):
-        # 1. Variational Distribution & Strategy over Latent Space X
+    def __init__(self, n_inducing, latent_dim):
         inducing_points = torch.randn(n_inducing, latent_dim)
-        variational_distribution = CholeskyVariationalDistribution(num_inducing_points=n_inducing)
+        variational_distribution = CholeskyVariationalDistribution(n_inducing)
         variational_strategy = VariationalStrategy(
             self,
             inducing_points,
@@ -24,6 +22,21 @@ class SharedVariationalGPLVM(ApproximateGP):
             learn_inducing_locations=True
         )
         super().__init__(variational_strategy)
+        self.mean_module = ZeroMean()
+        self.covar_module = ScaleKernel(RBFKernel(ard_num_dims=latent_dim))
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return MultivariateNormal(mean_x, covar_x)
+
+class SharedVariationalGPLVM(gpytorch.Module):
+    """
+    Container for the Shared vGPLVM.
+    Holds the shared latent parameters X and two independent GP mappings.
+    """
+    def __init__(self, n_data, latent_dim, n_inducing=50, Y1_dim=None, Y2_dim=None):
+        super().__init__()
         
         self.n_data = n_data
         self.latent_dim = latent_dim
@@ -37,15 +50,9 @@ class SharedVariationalGPLVM(ApproximateGP):
         )
         self.register_prior("prior_X", NormalPrior(torch.zeros(1), torch.ones(1)), "X")
         
-        # 3. Covariance Kernels for each Modality
-        # We assign an RBF Kernel to model smooth nonlinear mappings out of the latent space.
-        self.mean_module = ZeroMean()
-        
-        # Image Kernel
-        self.covar_module_img = ScaleKernel(RBFKernel(ard_num_dims=latent_dim))
-        
-        # Tabular Kernel
-        self.covar_module_tab = ScaleKernel(RBFKernel(ard_num_dims=latent_dim))
+        # 3. Independent GPs for each Modality
+        self.gp_img = LatentGP(n_inducing, latent_dim)
+        self.gp_tab = LatentGP(n_inducing, latent_dim)
         
         # Optional: Save dimensions for downstream construction of likelihoods
         self.Y1_dim = Y1_dim
@@ -57,18 +64,28 @@ class SharedVariationalGPLVM(ApproximateGP):
         Note: x is expected to be the latent space coordinates self.X.
         Returns the latent GP representation (to be mapped to Y_1 and Y_2 by likelihoods).
         """
-        mean_x = self.mean_module(x)
+        # Get marginal distributions from each GP
+        mvn_img = self.gp_img(x)
+        mvn_tab = self.gp_tab(x)
         
-        # We compute two separate covariances operating on the shared coordinate space
-        covar_img = self.covar_module_img(x)
-        covar_tab = self.covar_module_tab(x)
+        # Wrap as Multitask distributions to match Y1_dim and Y2_dim
+        # This effectively models D independent GPs sharing the same kernel/latent X
+        mt_img = MultitaskMultivariateNormal.from_repeated_mvn(mvn_img, num_tasks=self.Y1_dim)
+        mt_tab = MultitaskMultivariateNormal.from_repeated_mvn(mvn_tab, num_tasks=self.Y2_dim)
         
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_img), \
-               gpytorch.distributions.MultivariateNormal(mean_x, covar_tab)
+        return mt_img, mt_tab
                
     def sample_latent(self):
         """Helper to retrieve current latent parameters"""
         return self.X
+        
+    def latent_prior_loss(self):
+        """
+        Computes the negative log-likelihood of the latent X under the prior N(0, I).
+        Minimizing this term corresponds to MAP estimation for X.
+        """
+        # -log p(X) ~ 0.5 * sum(X^2) (ignoring constants)
+        return 0.5 * torch.sum(self.X ** 2)
 
 def create_multimodal_likelihoods(Y1_dim, Y2_dim):
     """
