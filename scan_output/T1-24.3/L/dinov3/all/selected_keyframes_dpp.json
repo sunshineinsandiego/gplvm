@@ -1,0 +1,308 @@
+{
+  "selected_frame_ids": [
+    "im1_f0000",
+    "im2_f0000",
+    "vid_f0099",
+    "vid_f0006",
+    "vid_f0020",
+    "vid_f0144",
+    "vid_f0032",
+    "vid_f0120",
+    "vid_f0000",
+    "vid_f0094",
+    "vid_f0023",
+    "vid_f0114"
+  ],
+  "kernel_type": "cosine_l2_normalized_with_epsilon_jitter",
+  "method": "dpp_map_greedy_logdet",
+  "seed": 0,
+  "epsilon": 1e-06,
+  "n_keyframes_requested": 10,
+  "n_keyframes_selected": 12,
+  "num_input_vectors": 163,
+  "coverage_extra": 5,
+  "input_dir": "/workspace/scan_output/T1-24.3/L/dinov3/all",
+  "selected_set_diversity_logdet": -32.668128967285156,
+  "selected_set_volume_proxy": 8.057604148713877e-08,
+  "coverage_table": [
+    {
+      "k": 0,
+      "selected_frame_ids_prefix": [],
+      "coverage": 0.0,
+      "delta_coverage": 0.0,
+      "diversity_logdet": 0.0,
+      "delta_diversity": 0.0,
+      "volume_proxy": 0.0
+    },
+    {
+      "k": 1,
+      "selected_frame_ids_prefix": [
+        "vid_f0099"
+      ],
+      "coverage": 0.977208137512207,
+      "delta_coverage": 0.977208137512207,
+      "diversity_logdet": 5.602820692729438e-06,
+      "delta_diversity": 5.602820692729438e-06,
+      "volume_proxy": 1.0000028014142703
+    },
+    {
+      "k": 2,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006"
+      ],
+      "coverage": 0.9825482964515686,
+      "delta_coverage": 0.005340158939361572,
+      "diversity_logdet": -1.618074655532837,
+      "delta_diversity": -1.6180802583535296,
+      "volume_proxy": 0.4452865249307403
+    },
+    {
+      "k": 3,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020"
+      ],
+      "coverage": 0.9842010140419006,
+      "delta_coverage": 0.0016527175903320312,
+      "diversity_logdet": -3.9386351108551025,
+      "delta_diversity": -2.3205604553222656,
+      "volume_proxy": 0.13955206027171657
+    },
+    {
+      "k": 4,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144"
+      ],
+      "coverage": 0.9894317984580994,
+      "delta_coverage": 0.0052307844161987305,
+      "diversity_logdet": -6.3080034255981445,
+      "delta_diversity": -2.369368314743042,
+      "volume_proxy": 0.04268098761593573
+    },
+    {
+      "k": 5,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032"
+      ],
+      "coverage": 0.9917978644371033,
+      "delta_coverage": 0.0023660659790039062,
+      "diversity_logdet": -9.144774436950684,
+      "delta_diversity": -2.836771011352539,
+      "volume_proxy": 0.010333262495370315
+    },
+    {
+      "k": 6,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120"
+      ],
+      "coverage": 0.9926174879074097,
+      "delta_coverage": 0.0008196234703063965,
+      "diversity_logdet": -12.058530807495117,
+      "delta_diversity": -2.9137563705444336,
+      "volume_proxy": 0.0024072616946807786
+    },
+    {
+      "k": 7,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000"
+      ],
+      "coverage": 0.9928027987480164,
+      "delta_coverage": 0.00018531084060668945,
+      "diversity_logdet": -15.129552841186523,
+      "delta_diversity": -3.0710220336914062,
+      "volume_proxy": 0.0005183932568692562
+    },
+    {
+      "k": 8,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094"
+      ],
+      "coverage": 0.9929847717285156,
+      "delta_coverage": 0.00018197298049926758,
+      "diversity_logdet": -18.583608627319336,
+      "delta_diversity": -3.4540557861328125,
+      "volume_proxy": 9.217659465829078e-05
+    },
+    {
+      "k": 9,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023"
+      ],
+      "coverage": 0.993174135684967,
+      "delta_coverage": 0.00018936395645141602,
+      "diversity_logdet": -22.048839569091797,
+      "delta_diversity": -3.465230941772461,
+      "volume_proxy": 1.6298788394404782e-05
+    },
+    {
+      "k": 10,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023",
+        "vid_f0114"
+      ],
+      "coverage": 0.99373459815979,
+      "delta_coverage": 0.000560462474822998,
+      "diversity_logdet": -25.525300979614258,
+      "delta_diversity": -3.476461410522461,
+      "volume_proxy": 2.8658358939593426e-06
+    },
+    {
+      "k": 11,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023",
+        "vid_f0114",
+        "vid_f0011"
+      ],
+      "coverage": 0.9940609931945801,
+      "delta_coverage": 0.00032639503479003906,
+      "diversity_logdet": -29.080270767211914,
+      "delta_diversity": -3.5549697875976562,
+      "volume_proxy": 4.845063092047465e-07
+    },
+    {
+      "k": 12,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023",
+        "vid_f0114",
+        "vid_f0011",
+        "vid_f0064"
+      ],
+      "coverage": 0.9950366020202637,
+      "delta_coverage": 0.0009756088256835938,
+      "diversity_logdet": -32.668128967285156,
+      "delta_diversity": -3.587858200073242,
+      "volume_proxy": 8.057604148713877e-08
+    },
+    {
+      "k": 13,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023",
+        "vid_f0114",
+        "vid_f0011",
+        "vid_f0064",
+        "vid_f0137"
+      ],
+      "coverage": 0.9952396154403687,
+      "delta_coverage": 0.00020301342010498047,
+      "diversity_logdet": -36.3892822265625,
+      "delta_diversity": -3.7211532592773438,
+      "volume_proxy": 1.2536253463075358e-08
+    },
+    {
+      "k": 14,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023",
+        "vid_f0114",
+        "vid_f0011",
+        "vid_f0064",
+        "vid_f0137",
+        "vid_f0088"
+      ],
+      "coverage": 0.9954509139060974,
+      "delta_coverage": 0.00021129846572875977,
+      "diversity_logdet": -40.21280288696289,
+      "delta_diversity": -3.8235206604003906,
+      "volume_proxy": 1.853108303902653e-09
+    },
+    {
+      "k": 15,
+      "selected_frame_ids_prefix": [
+        "vid_f0099",
+        "vid_f0006",
+        "vid_f0020",
+        "vid_f0144",
+        "vid_f0032",
+        "vid_f0120",
+        "vid_f0000",
+        "vid_f0094",
+        "vid_f0023",
+        "vid_f0114",
+        "vid_f0011",
+        "vid_f0064",
+        "vid_f0137",
+        "vid_f0088",
+        "vid_f0156"
+      ],
+      "coverage": 0.9958556890487671,
+      "delta_coverage": 0.00040477514266967773,
+      "diversity_logdet": -44.162322998046875,
+      "delta_diversity": -3.9495201110839844,
+      "volume_proxy": 2.5720144663617977e-10
+    }
+  ]
+}

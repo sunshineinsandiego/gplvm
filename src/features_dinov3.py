@@ -28,7 +28,7 @@ if str(SRC_DIR) not in sys.path:
 
 from sequence_frame_loader import (
     SequenceSource,
-    detect_sequence_source,
+    detect_all_sources,
     load_selected_rgb_frame,
     output_stem,
     parse_frame_index_args,
@@ -441,54 +441,21 @@ def main() -> int:
 
     try:
         _validate_user_offsets(args)
-        source = detect_sequence_source(input_root)
-        _print_source_summary(source)
-        target_frame_indices = parse_frame_index_args(
-            values=args.frame_index,
-            frame_count=source.frame_count,
-        )
+        sources = detect_all_sources(input_root)
+        for s in sources:
+            _print_source_summary(s)
     except Exception as exc:
         print(f"Error while validating input={input_root}: {exc}", file=sys.stderr)
         return 4
 
-    subset_label = _subset_label(args.frame_index, target_frame_indices)
+    subset_label = _subset_label(args.frame_index, [0]) # Base label
     sequence_out_root = _resolve_sequence_output_root(
         input_root=input_root,
         output_root=output_root,
     )
     out_dir = sequence_out_root / "dinov3" / subset_label
     out_dir.mkdir(parents=True, exist_ok=True)
-    target_outputs: list[tuple[int, Path, list[Path]]] = []
-    for frame_index in target_frame_indices:
-        base_name = output_stem(source, frame_index)
-        out_path = out_dir / f"{base_name}.npy"
-        debug_paths: list[Path] = []
-        if args.save_pre_encoder:
-            debug_dir = out_path.parent
-            debug_paths = [
-                debug_dir / f"{base_name}_pre_encoder_tensor.npy",
-                debug_dir / f"{base_name}_pre_encoder_preview.png",
-            ]
-        target_outputs.append((frame_index, out_path, debug_paths))
-
-    if not args.overwrite:
-        existing: list[Path] = []
-        for _, out_path, debug_paths in target_outputs:
-            paths_to_check = [*debug_paths]
-            if args.save_encodings:
-                paths_to_check.append(out_path)
-            for path in paths_to_check:
-                if path.exists():
-                    existing.append(path)
-        if existing:
-            rendered = ", ".join(str(path) for path in existing)
-            print(
-                "Error: overwrite attempted with --overwrite=false. "
-                f"Existing paths: {rendered}",
-                file=sys.stderr,
-            )
-            return 5
-
+    
     device = torch.device(args.device)
     dino = torch.hub.load(
         str(repo_dir),
@@ -498,13 +465,52 @@ def main() -> int:
     )
     dino.eval().to(device)
 
-    selected_source = "<unresolved>"
-    current_frame_index = -1
-    in_memory_feats = []
+    all_static_ids = []  # Single images automatically kept
+    in_memory_feats = [] # Video frames kept for DPP
     in_memory_ids = []
+    
+    target_outputs: list[tuple[SequenceSource, int, Path, list[Path]]] = []
+    
+    for source in sources:
+        target_frame_indices = parse_frame_index_args(
+            values=args.frame_index,
+            frame_count=source.frame_count,
+        )
+        
+        for frame_index in target_frame_indices:
+            base_name = output_stem(source, frame_index)
+            out_path = out_dir / f"{base_name}.npy"
+            debug_paths: list[Path] = []
+            if args.save_pre_encoder:
+                debug_dir = out_path.parent
+                debug_paths = [
+                    debug_dir / f"{base_name}_pre_encoder_tensor.npy",
+                    debug_dir / f"{base_name}_pre_encoder_preview.png",
+                ]
+            target_outputs.append((source, frame_index, out_path, debug_paths))
+
+    if not args.overwrite:
+        existing: list[Path] = []
+        for _, _, out_path, debug_paths in target_outputs:
+            paths_to_check = [*debug_paths]
+            if args.save_encodings:
+                paths_to_check.append(out_path)
+            for path in paths_to_check:
+                if path.exists():
+                    existing.append(path)
+        if existing:
+            rendered = ", ".join(str(path) for path in existing)
+            print(
+                f"Warning: skip extraction due to existing paths and --overwrite=false. "
+                f"Paths: {rendered}",
+                file=sys.stderr,
+            )
+            return 0
+
+    print(f"DEBUG: Processing {len(target_outputs)} frames in total.")
     try:
-        for frame_index, out_path, _ in target_outputs:
-            current_frame_index = frame_index
+        for source, frame_index, out_path, _ in target_outputs:
+            is_static = source.source_type in ["image_single", "dicom_single"]
             base_name = out_path.stem
             selected_source = str(source_frame_path(source, frame_index))
             frame_rgb_u8 = load_selected_rgb_frame(source, frame_index)
@@ -526,8 +532,11 @@ def main() -> int:
             feats = _extract_features(dino, image_t, device)
             
             if args.dpp_keyframes > 0:
-                in_memory_feats.append(feats.numpy())
-                in_memory_ids.append(base_name)
+                if is_static:
+                    all_static_ids.append(base_name)
+                else:
+                    in_memory_feats.append(feats.numpy())
+                    in_memory_ids.append(base_name)
                 
             if args.save_encodings:
                 np.save(out_path, feats.numpy())
@@ -535,41 +544,46 @@ def main() -> int:
         print(
             "Error while processing source. "
             f"source={selected_source}, source_type={source.source_type}, "
-            f"frame_index={current_frame_index}. Cause: {exc}",
+            f"frame_index={frame_index}. Cause: {exc}",
             file=sys.stderr,
         )
         return 6
 
-    if args.dpp_keyframes > 0 and len(in_memory_feats) > 0:
-        embeddings = np.stack(in_memory_feats, axis=0)
-        num_frames = embeddings.shape[0]
+    if args.dpp_keyframes > 0:
+        embeddings = np.stack(in_memory_feats, axis=0) if in_memory_feats else np.empty((0,))
+        if embeddings.ndim > 2:
+            embeddings = embeddings.reshape(embeddings.shape[0], -1)
+            
+        num_frames = embeddings.shape[0] if embeddings.ndim == 2 else 0
         n_select = min(args.dpp_keyframes, num_frames)
-        coverage_sim, kernel = build_cosine_matrices(embeddings)
-        k_report_max = min(num_frames, n_select + 5)
-        order_for_report = greedy_dpp_map_order(kernel, k_report_max)
-        selected_indices = order_for_report[:n_select]
-        selected_ids = [in_memory_ids[idx] for idx in selected_indices]
-        coverage_table = build_coverage_table(order_for_report, in_memory_ids, coverage_sim, kernel)
+        
+        if num_frames > 0:
+            coverage_sim, kernel = build_cosine_matrices(embeddings)
+            k_report_max = min(num_frames, n_select + 5)
+            order_for_report = greedy_dpp_map_order(kernel, k_report_max)
+            selected_indices = order_for_report[:n_select]
+            selected_video_ids = [in_memory_ids[idx] for idx in selected_indices]
+            coverage_table = build_coverage_table(order_for_report, in_memory_ids, coverage_sim, kernel)
+        else:
+            selected_video_ids = []
+            coverage_table = []
+            
+        final_selected_ids = all_static_ids + selected_video_ids
         
         output_json = out_dir / "selected_keyframes_dpp.json"
         save_keyframes_json(
             output_path=output_json,
             input_dir=out_dir,
-            selected_ids=selected_ids,
+            selected_ids=final_selected_ids,
             n_requested=args.dpp_keyframes,
-            num_input_vectors=num_frames,
+            num_input_vectors=num_frames + len(all_static_ids),
             coverage_extra=5,
             coverage_table=coverage_table,
         )
         print(f"Performed in-memory DPP selection. Wrote JSON to: {output_json}")
 
-    if args.save_encodings and len(target_outputs) == 1:
-        print(f"Done. Wrote features to: {target_outputs[0][1]}")
-    elif args.save_encodings:
-        print(
-            "Done. Wrote DINOv3 features for "
-            f"{len(target_outputs)} frames under: {out_dir}"
-        )
+    if args.save_encodings:
+        print(f"Done. Wrote DINOv3 features under: {out_dir}")
     else:
         print("Done. Skipped writing DINOv3 feature .npy files (--save-encodings=false).")
     return 0

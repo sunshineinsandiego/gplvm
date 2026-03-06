@@ -114,102 +114,97 @@ def parse_frame_index_args(values: list[str], frame_count: int) -> list[int]:
     return indices
 
 
-def detect_sequence_source(input_root: Path) -> SequenceSource:
-    """Detect one strict sequence source inside input_root."""
+def detect_all_sources(input_root: Path) -> list[SequenceSource]:
+    """Detect all valid image, video, and sequence sources inside input_root."""
     files = _list_sequence_files(input_root)
-
-    if len(files) == 1:
-        path = files[0]
-        ext = path.suffix.lower()
-        if ext in IMAGE_EXTS:
-            return SequenceSource(
-                source_type="image_single",
-                source_stem=path.stem,
-                frame_count=1,
-                frame_rate_fps=None,
-                primary_path=path,
-            )
-        if ext in VIDEO_EXTS:
-            frame_count, fps = _video_metadata(path)
-            return SequenceSource(
-                source_type="video_single",
-                source_stem=path.stem,
-                frame_count=frame_count,
-                frame_rate_fps=fps,
-                primary_path=path,
-            )
-        if ext in DICOM_EXTS:
-            frame_count = _dicom_frame_count(path)
-            return SequenceSource(
-                source_type="dicom_multiframe" if frame_count > 1 else "dicom_single",
-                source_stem=path.stem,
-                frame_count=frame_count,
-                frame_rate_fps=None,
-                primary_path=path,
-            )
-        raise ValueError(
-            f"Unsupported file extension in sequence folder: {path.name}"
-        )
+    sources: list[SequenceSource] = []
+    
+    # Track which files have been claimed by a sequence to avoid double-counting
+    claimed_files: set[Path] = set()
 
     dcm_files = [p for p in files if p.suffix.lower() in DICOM_EXTS]
     
-    # Try to extract instance numbers robustly, dropping .dcm files that lack one
-    # (e.g., standalone screenshots mixed into the sequence folder)
-    pairs: list[tuple[int, Path]] = []
+    # 1. Extract valid DICOM sequences (groups by SeriesInstanceUID)
+    from collections import defaultdict
+    series_groups: dict[str, list[tuple[int, Path]]] = defaultdict(list)
+    
     for path in dcm_files:
         try:
             instance_number = _dicom_instance_number(path)
-            pairs.append((instance_number, path))
+            series_uid = _dicom_series_uid(path)
+            series_groups[series_uid].append((instance_number, path))
         except Exception:
             continue
             
-    if len(pairs) >= 8:
-        unique_instances = {instance for instance, _ in pairs}
-        if len(unique_instances) == len(pairs):
-            # Only return as a sequence if every file had a unique instance number
-            ordered = tuple(path for _, path in sorted(pairs, key=lambda item: item[0]))
-            return SequenceSource(
-                source_type="dicom_sequence",
-                source_stem=input_root.name,
-                frame_count=len(ordered),
-                frame_rate_fps=None,
-                primary_path=None,
-                sequence_paths=ordered,
-            )
-        
-    # If the folder has mixed files or less than 8 DCMs, look for a primary valid file
-    # (e.g., an MP4 video or a single DICOM) and process it as a single source.
-    valid_primary_files = [p for p in files if p.suffix.lower() in IMAGE_EXTS | VIDEO_EXTS]
-    
-    # If we find exactly one video in a folder with arbitrary other junk, prioritize it
-    videos = [p for p in files if p.suffix.lower() in VIDEO_EXTS]
-    if len(videos) == 1:
-        path = videos[0]
-        frame_count, fps = _video_metadata(path)
-        return SequenceSource(
-            source_type="video_single",
-            source_stem=path.stem,
-            frame_count=frame_count,
-            frame_rate_fps=fps,
-            primary_path=path,
-        )
-        
-    if len(valid_primary_files) == 1:
-        path = valid_primary_files[0]
+    for uid, pairs in series_groups.items():
+        if len(pairs) > 1: # A sequence must have > 1 item
+            unique_instances = {instance for instance, _ in pairs}
+            if len(unique_instances) == len(pairs):
+                ordered = tuple(path for _, path in sorted(pairs, key=lambda item: item[0]))
+                claimed_files.update(ordered)
+                sources.append(
+                    SequenceSource(
+                        source_type="dicom_sequence",
+                        source_stem=f"{input_root.name}_{uid[-6:]}", # disambiguate multiple series
+                        frame_count=len(ordered),
+                        frame_rate_fps=None,
+                        primary_path=None,
+                        sequence_paths=ordered,
+                    )
+                )
+
+    # 2. Extract videos
+    for path in files:
+        if path in claimed_files:
+            continue
         ext = path.suffix.lower()
-        if ext in IMAGE_EXTS or ext in DICOM_EXTS:
-            return SequenceSource(
-                source_type="image_single" if ext in IMAGE_EXTS else "dicom_single",
-                source_stem=path.stem,
-                frame_count=1,
-                frame_rate_fps=None,
-                primary_path=path,
+        if ext in VIDEO_EXTS:
+            frame_count, fps = _video_metadata(path)
+            sources.append(
+                SequenceSource(
+                    source_type="video_single",
+                    source_stem=path.stem,
+                    frame_count=frame_count,
+                    frame_rate_fps=fps,
+                    primary_path=path,
+                )
+            )
+            claimed_files.add(path)
+            
+    # 3. Extract standalone images and standalone multiframe DICOMs
+    for path in files:
+        if path in claimed_files:
+            continue
+        ext = path.suffix.lower()
+        if ext in IMAGE_EXTS:
+            sources.append(
+                SequenceSource(
+                    source_type="image_single",
+                    source_stem=path.stem,
+                    frame_count=1,
+                    frame_rate_fps=None,
+                    primary_path=path,
+                )
+            )
+        elif ext in DICOM_EXTS:
+            frame_count = _dicom_frame_count(path)
+            sources.append(
+                SequenceSource(
+                    source_type="dicom_multiframe" if frame_count > 1 else "dicom_single",
+                    source_stem=path.stem,
+                    frame_count=frame_count,
+                    frame_rate_fps=None,
+                    primary_path=path,
+                )
             )
 
-    raise ValueError(
-        "Sequence folder must contain exactly one valid source file "
-        "(e.g. single image/video), or a strict DICOM sequence of >= 8 ordered slices."
-    )
+    if not sources:
+        raise ValueError(
+            f"No valid sources found in {input_root}. Ensure the folder contains "
+            "images, videos, or DICOM files."
+        )
+        
+    return sources
 
 
 def source_frame_path(source: SequenceSource, frame_index: int) -> Path:
@@ -337,6 +332,20 @@ def _dicom_instance_number(path: Path) -> int:
         raise ValueError(
             f"Non-integer InstanceNumber in DICOM slice sequence file {path}: {raw!r}"
         ) from exc
+
+
+def _dicom_series_uid(path: Path) -> str:
+    if pydicom is None:
+        raise ImportError(
+            "pydicom is required for DICOM input. Install with: pip install pydicom"
+        )
+    ds = pydicom.dcmread(str(path), stop_before_pixels=True)
+    uid = ds.get("SeriesInstanceUID", None)
+    if uid is None or str(uid).strip() == "":
+        raise ValueError(
+            f"Missing SeriesInstanceUID in DICOM file: {path}"
+        )
+    return str(uid).strip()
 
 
 def _video_metadata(path: Path) -> tuple[int, float | None]:
