@@ -141,7 +141,7 @@ def aggregate_game_stats(team, player, timepoint, game_stats_df):
         "GP": len(player_games)
     }
 
-def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encoder, n_keyframes):
+def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encoder, n_keyframes, off_top=0, off_bottom=0, off_left=0, off_right=0):
     """
     Executes Steps 1 and 2 of the dataset compilation pipeline.
     Parses scans, extracts static patient info, targets based on timepoint, 
@@ -232,50 +232,110 @@ def compile_tabular_data(scan_dir, ppt_csv, game_stats_cu, game_stats_fd, encode
         # We use a temporary directory to capture the JSON output from the feature extractor
         selected_frames = []
         
-        with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"Processing {scan['scan_path']} (DPP selection)...")
-            workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            rel_scan_path = os.path.relpath(scan['scan_path'], workspace_dir)
+        import sys
+        import torch
+        workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        src_dir = os.path.join(workspace_dir, "src")
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
             
-            import sys
-            cmd = [
-                sys.executable, f"{workspace_dir}/src/features_{encoder}.py",
-                "--input", f"{workspace_dir}/{rel_scan_path}",
-                "--output-root", temp_dir,
-                "--save-encodings", "false",     # Do NOT save .npy files
-                "--save-pre-encoder", "false",
-                "--frame-index", "all",
-                "--dpp-keyframes", str(n_keyframes)
-            ]
+        from sequence_frame_loader import detect_all_sources, load_selected_rgb_frame
+        from pathlib import Path
+        
+        try:
+            sources = detect_all_sources(Path(scan['scan_path']))
+        except Exception as e:
+            print(f"Error extracting sequence sources from {scan['scan_path']}: {e}")
+            sources = []
             
-            try:
-                # Run the extractor. It will write selected_keyframes_dpp.json to temp_dir/...
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-                
-                # Find the JSON file. It will be nested under temp_dir/Subject/Knee/encoder/subset/
-                json_files = glob.glob(os.path.join(temp_dir, "**", "selected_keyframes_dpp.json"), recursive=True)
-                
-                if json_files:
-                    with open(json_files[0], 'r') as f:
-                        dpp_data = json.load(f)
-                    selected_frames = dpp_data.get("selected_frame_ids", [])
-                else:
-                    print(f"Warning: No DPP JSON generated for {scan['scan_path']}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error extracting features for {scan['scan_path']}: {e.stderr}")
-
-        if not selected_frames:
-            # Fallback: emit one row with no frame_id if extraction failed or no frames found
-            frame_row = row.copy()
-            frame_row['frame_id'] = None
-            frame_row['embedding_dir'] = None
-            merged_rows.append(frame_row)
+        if n_keyframes == "all":
+            for source in sources:
+                for f_idx in range(source.frame_count):
+                    frame_id = f"{source.source_stem}_f{f_idx:04d}"
+                    frame_row = row.copy()
+                    frame_row['frame_id'] = frame_id
+                    frame_row['scan_path'] = str(source.primary_path or source.sequence_paths[f_idx])
+                    merged_rows.append(frame_row)
             continue
             
-        for frame_id in selected_frames:
-            frame_row = row.copy()
-            frame_row['frame_id'] = frame_id
-            merged_rows.append(frame_row)
+        else:
+            try:
+                n_select_target = int(n_keyframes)
+            except ValueError:
+                n_select_target = 0
+                
+            if n_select_target > 0:
+                from select_keyframes_dpp import build_cosine_matrices, greedy_dpp_map_order
+                
+                # Lazy load model if not already loaded globally
+                global _LAZY_MODEL, _LAZY_DEVICE, _LAZY_ENCODER_NAME
+                if '_LAZY_MODEL' not in globals() or _LAZY_ENCODER_NAME != encoder:
+                    print(f"Loading {encoder} model for on-the-fly DPP feature extraction...")
+                    _LAZY_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                    _LAZY_ENCODER_NAME = encoder
+                    if encoder == "dinov3":
+                        import dinov3
+                        model_name = "dinov3_vits16"
+                        weights_path = os.environ.get("DINOV3_WEIGHTS", "/workspace/models/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth")
+                        print(f"Loading {model_name} from local path: {weights_path}")
+                        _LAZY_MODEL = torch.hub.load(
+                            "/app/dinov3", 
+                            model_name, 
+                            source="local", 
+                            pretrained=False
+                        )
+                        _LAZY_MODEL.load_state_dict(torch.load(weights_path, map_location=_LAZY_DEVICE, weights_only=True))
+                    elif encoder == "medsam2":
+                        # Import specific to medsam2 if implemented
+                        pass
+                    
+                    if getattr(sys.modules[__name__], '_LAZY_MODEL', None):
+                        _LAZY_MODEL.eval().to(_LAZY_DEVICE)
+                        
+                for source in sources:
+                    is_static = source.source_type in ["image_single", "dicom_single"]
+                    if is_static or source.frame_count <= n_select_target:
+                        # Automatically select all frames if single-frame or fewer frames than requested subset
+                        for f_idx in range(source.frame_count):
+                            frame_id = f"{source.source_stem}_f{f_idx:04d}"
+                            frame_row = row.copy()
+                            frame_row['frame_id'] = frame_id
+                            frame_row['scan_path'] = str(source.primary_path or source.sequence_paths[f_idx])
+                            merged_rows.append(frame_row)
+                    else:
+                        print(f"Performing on-the-fly DPP selection ({n_select_target} from {source.frame_count}) for {source.source_stem}...")
+                        in_memory_feats = []
+                        in_memory_ids = []
+                        in_memory_paths = []
+                        
+                        if encoder == "dinov3":
+                            from features_dinov3 import _preprocess, _extract_features
+                            for f_idx in range(source.frame_count):
+                                base_name = f"{source.source_stem}_f{f_idx:04d}"
+                                frame_rgb_u8 = load_selected_rgb_frame(source, f_idx)
+                                image_t = _preprocess(frame_rgb_u8, patch_size=16, off_top=off_top, off_bottom=off_bottom, off_left=off_left, off_right=off_right, imagenet=False)
+                                feats = _extract_features(_LAZY_MODEL, image_t, _LAZY_DEVICE)
+                                in_memory_feats.append(feats.numpy())
+                                in_memory_ids.append(base_name)
+                                in_memory_paths.append(str(source.primary_path or source.sequence_paths[f_idx]))
+                        else:
+                            # Fallback if other encoders requested
+                            pass
+                            
+                        if in_memory_feats:
+                            embeddings = np.stack(in_memory_feats, axis=0)
+                            if embeddings.ndim > 2:
+                                embeddings = embeddings.reshape(embeddings.shape[0], -1)
+                            
+                            coverage_sim, kernel = build_cosine_matrices(embeddings)
+                            order = greedy_dpp_map_order(kernel, k=n_select_target + 5)
+                            selected_indices = order[:n_select_target]
+                            
+                            for idx in selected_indices:
+                                frame_row = row.copy()
+                                frame_row['frame_id'] = in_memory_ids[idx]
+                                frame_row['scan_path'] = in_memory_paths[idx]
+                                merged_rows.append(frame_row)
             
     final_df = pd.DataFrame(merged_rows)
     print(f"Successfully joined {len(final_df)} scan records to tabular data. Skipped {skipped_patient} missing tabulars.")
@@ -288,12 +348,20 @@ if __name__ == "__main__":
     parser.add_argument("--cu_csv", type=str, default="data/game_stats_CU.csv", help="Path to game_stats_CU.csv")
     parser.add_argument("--fd_csv", type=str, default="data/game_stats_FD.csv", help="Path to game_stats_FD.csv")
     parser.add_argument("--encoder", type=str, choices=["dinov3", "medsam2"], default="dinov3", help="Encoder used (dinov3 or medsam2)")
-    parser.add_argument("--n_keyframes", type=int, default=10, help="Number of keyframes to select per video (default: 10)")
+    parser.add_argument("--n_keyframes", type=str, default="all", help="Number of keyframes to select per video (default: 'all', or pass an integer)")
     parser.add_argument("--out_manifest", type=str, default="data/manifest.csv", help="Output path for manifest CSV")
+    
+    parser.add_argument("--off_top", type=int, default=0, help="Pixels to crop from top of frame")
+    parser.add_argument("--off_bottom", type=int, default=0, help="Pixels to crop from bottom of frame")
+    parser.add_argument("--off_left", type=int, default=0, help="Pixels to crop from left of frame")
+    parser.add_argument("--off_right", type=int, default=0, help="Pixels to crop from right of frame")
     
     args = parser.parse_args()
     
-    df = compile_tabular_data(args.scan_dir, args.ppt_csv, args.cu_csv, args.fd_csv, args.encoder, args.n_keyframes)
+    df = compile_tabular_data(
+        args.scan_dir, args.ppt_csv, args.cu_csv, args.fd_csv, args.encoder, args.n_keyframes,
+        off_top=args.off_top, off_bottom=args.off_bottom, off_left=args.off_left, off_right=args.off_right
+    )
     
     if not df.empty:
         static = ['HEIGHT', 'WEIGHT', 'BMI', 'AGE', 'POS', 'YEARS']

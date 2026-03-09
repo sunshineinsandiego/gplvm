@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  dinov3:
+  gplvm_dinov3:
     image: dinov3:latest
     container_name: gplvm_dinov3
     working_dir: /workspace
@@ -18,8 +16,11 @@ services:
     # Keep container alive for execution via `docker exec`
     command: tail -f /dev/null
 
-  gpytorch:
-    image: pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+  gplvm_gpytorch:
+    build:
+      context: .
+      dockerfile: docker/gpytorch/Dockerfile
+    image: gplvm_gpytorch_image:latest
     container_name: gplvm_gpytorch
     working_dir: /workspace
     volumes:

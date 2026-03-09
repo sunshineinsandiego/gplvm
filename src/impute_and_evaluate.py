@@ -1,5 +1,6 @@
 import os
 import argparse
+import json
 import numpy as np
 import pandas as pd
 import torch
@@ -48,15 +49,44 @@ def infer_latent_map(model, likelihood_img, y1_data, n_steps=100, lr=0.05):
             
     return x_param.detach()
 
+def get_bucket(val, col_name):
+    """Maps continuous values to buckets based on clinical definitions."""
+    if "V_SCORE" in col_name:
+        if val < 70: return 0 # <70
+        if val < 80: return 1 # 70-80
+        if val < 90: return 2 # 80-90
+        return 3              # 90+
+    if "AT_THICK" in col_name:
+        if val < 4.5: return 0 # Healthy
+        if val < 5.5: return 1 # Thickened
+        return 2               # Pathological
+    if "AVG_MIN" in col_name:
+        if val <= 20: return 0 # Low
+        return 1               # High
+    return -1 # No bucket defined
+
 def evaluate_imputation(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     
-    # 1. Load Data
+    # 1. Load Stats and Data
+    stats_path = os.path.join(args.model_dir, "y_stats.json")
+    if not os.path.exists(stats_path):
+        raise FileNotFoundError(f"Stats file not found at {stats_path}. Train model first.")
+        
+    with open(stats_path, 'r') as f:
+        stats = json.load(f)
+        # Convert lists back to numpy
+        stats['xtab_mean'] = np.array(stats['xtab_mean'], dtype=np.float32)
+        stats['xtab_std'] = np.array(stats['xtab_std'], dtype=np.float32)
+        stats['ytarget_mean'] = np.array(stats['ytarget_mean'], dtype=np.float32)
+        stats['ytarget_std'] = np.array(stats['ytarget_std'], dtype=np.float32)
+    
     print(f"Loading datasets for evaluation: {args.manifest}")
     dataset = MultimodalDataset(
         args.manifest, 
         encoder=args.encoder,
-        device=args.device
+        device=args.device,
+        stats=stats # Pass stats to normalize input data same as training
     )
     
     # Get dimensions
@@ -105,6 +135,7 @@ def evaluate_imputation(args):
     all_preds = []
     all_truth = []
     all_latents = []
+    all_indices = []
     
     with torch.no_grad():
         for i in range(N):
@@ -133,18 +164,57 @@ def evaluate_imputation(args):
             mse = torch.nn.functional.mse_loss(y_pred_mean, y_true_tab).item()
             mse_total += mse
             
+            all_indices.append(i)
             all_preds.append(y_pred_mean.cpu().numpy())
             all_truth.append(y_true_tab.cpu().numpy())
             
-            if i < 5: # Print a few examples
-                print(f"Sample {i}:")
-                print(f"  True Tabular: {y_true_tab.cpu().numpy()[:5]}...")
-                print(f"  Pred Tabular: {y_pred_mean.cpu().numpy()[:5]}...\n")
                 
     avg_mse = mse_total / N
     print(f"\nFinal Evaluation:")
     print(f"Average MSE across all generalized Tabular predictions: {avg_mse:.4f}")
     
+    # --- Un-normalize and Bucket Evaluation ---
+    print("\n--- Clinical Bucket Accuracy ---")
+    
+    # Reconstruct full Y2 matrix (preds and truth)
+    Y_pred_norm = np.vstack(all_preds)
+    Y_true_norm = np.vstack(all_truth)
+    
+    # Split back into X_tab and Y_target components to un-normalize
+    # Y2 was constructed as cat(X_tab, Y_target)
+    n_xtab = len(stats['xtab_cols'])
+    n_ytarget = len(stats['ytarget_cols'])
+    
+    # Extract just the Y_target part (clinical outcomes)
+    Y_pred_target_norm = Y_pred_norm[:, n_xtab:]
+    Y_true_target_norm = Y_true_norm[:, n_xtab:]
+    
+    # Un-normalize
+    Y_pred_target = Y_pred_target_norm * stats['ytarget_std'] + stats['ytarget_mean']
+    Y_true_target = Y_true_target_norm * stats['ytarget_std'] + stats['ytarget_mean']
+    
+    # Check buckets for specific columns
+    for idx, col_name in enumerate(stats['ytarget_cols']):
+        if col_name in ['V_SCORE', 'AT_THICK', 'AVG_MIN']:
+            correct = 0
+            total = 0
+            for i in range(N):
+                # Skip if ground truth was NaN (masked)
+                # In dataset, NaNs are preserved.
+                if np.isnan(Y_true_target[i, idx]):
+                    continue
+                    
+                true_bucket = get_bucket(Y_true_target[i, idx], col_name)
+                pred_bucket = get_bucket(Y_pred_target[i, idx], col_name)
+                
+                if true_bucket != -1:
+                    total += 1
+                    if true_bucket == pred_bucket:
+                        correct += 1
+            
+            if total > 0:
+                print(f"  {col_name} Accuracy: {correct}/{total} ({correct/total*100:.1f}%)")
+
     # --- Attribution / Correlation Analysis ---
     print("\n--- Attribution Analysis: Latent vs Tabular Correlations ---")
     print("Which latent dimensions drive which clinical outputs?")
@@ -153,12 +223,8 @@ def evaluate_imputation(args):
     X_matrix = np.vstack(all_latents).squeeze()
     Y_pred_matrix = np.vstack(all_preds)
     
-    # Define column names (matching train_gplvm.py)
-    static_cols = ['HEIGHT', 'WEIGHT', 'BMI', 'AGE', 'POS', 'YEARS']
-    game_cols = ['AVG_MIN', 'AVG_PTS', 'AVG_REB', 'AVG_AST', 'AVG_PLUS_MINUS', 'TOT_MIN', 'TOT_PTS', 'TOT_REB', 'TOT_AST', 'TOT_PLUS_MINUS', 'GP']
-    clinical_cols = ['V_SCORE', 'PT_TEND', 'TT_TEND', 'HE', 'AT_THICK', 'SYMP', 'HEPRE', 'HEMID', 'HEPOST']
-    # Filter to what's actually in the dataset
-    cols = [c for c in static_cols + game_cols + clinical_cols if c in dataset.manifest.columns]
+    # Use the columns from stats
+    cols = stats['xtab_cols'] + stats['ytarget_cols']
     
     # Compute correlation between each Latent Dim and each Tabular Output
     # This tells us: "Latent Dim 3 is highly correlated with VISA Score"

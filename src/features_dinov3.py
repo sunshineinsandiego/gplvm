@@ -308,7 +308,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--frame-index",
         nargs="+",
-        default=["0"],
+        default=["all"],
         help=(
             "Frame selection: one index (e.g. 0), multiple indices "
             "(e.g. 1 2 3 or 1,2,3), or all."

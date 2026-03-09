@@ -14,14 +14,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG TARGETARCH
 ENV CONDA_DIR=/opt/conda
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
-        MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"; \
+    MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"; \
     else \
-        MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh"; \
+    MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh"; \
     fi && \
     curl -fsSL "$MINICONDA_URL" -o /tmp/miniconda.sh && \
     /bin/bash /tmp/miniconda.sh -b -p $CONDA_DIR && \
     rm -f /tmp/miniconda.sh
 ENV PATH=$CONDA_DIR/bin:$PATH
+
+# Accept Anaconda Terms of Service (if available)
+RUN if conda tos -h >/dev/null 2>&1; then \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r ; \
+    fi
 
 # Create environment
 RUN conda create -n gpytorch python=3.12 -y
@@ -30,7 +36,21 @@ RUN conda create -n gpytorch python=3.12 -y
 SHELL ["conda", "run", "-n", "gpytorch", "/bin/bash", "-c"]
 RUN python -m pip install --no-cache-dir --upgrade pip
 RUN python -m pip install --no-cache-dir torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
-RUN python -m pip install --no-cache-dir gpytorch matplotlib pandas numpy scikit-learn jupyterlab
+RUN python -m pip install --no-cache-dir \
+    gpytorch matplotlib pandas numpy scikit-learn \
+    jupyterlab pydicom opencv-python \
+    umap-learn tensorboard \
+    pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg
+
+# Clone and install DINOv3 into the gpytorch environment
+ARG DINOV3_REF=54694f7627fd815f62a5dcc82944ffa6153bbb76
+WORKDIR /app
+RUN git clone https://github.com/facebookresearch/dinov3.git && \
+    cd /app/dinov3 && \
+    git checkout ${DINOV3_REF}
+
+WORKDIR /app/dinov3
+RUN python -m pip install --no-cache-dir -e .
 
 # Auto-activate conda env for interactive shells
 RUN echo 'source /opt/conda/etc/profile.d/conda.sh' >> /root/.bashrc && \

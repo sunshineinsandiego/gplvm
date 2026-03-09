@@ -1,5 +1,7 @@
 import os
 import argparse
+import json
+import math
 import numpy as np
 import pandas as pd
 import torch
@@ -22,8 +24,11 @@ class MultimodalDataset(Dataset):
     Computes high-dimensional DINOv3 features on-the-fly from raw images/videos
     to avoid saving massive embedding files.
     """
-    def __init__(self, manifest_path, encoder="dinov3", device="cuda"):
-        self.manifest = pd.read_csv(manifest_path)
+    def __init__(self, manifest_source, encoder="dinov3", device="cuda", stats=None):
+        if isinstance(manifest_source, pd.DataFrame):
+            self.manifest = manifest_source
+        else:
+            self.manifest = pd.read_csv(manifest_source)
         
         # Define columns to extract (matching compile_dataset.py)
         static_cols = ['HEIGHT', 'WEIGHT', 'BMI', 'AGE', 'POS', 'YEARS']
@@ -37,6 +42,15 @@ class MultimodalDataset(Dataset):
         self.X_tab = self.manifest[xtab_cols].values.astype(np.float32)
         self.Y_target = self.manifest[ytarget_cols].values.astype(np.float32)
         
+        # Normalize if stats provided
+        self.stats = stats
+        if self.stats:
+            # Normalize X_tab
+            self.X_tab = (self.X_tab - self.stats['xtab_mean']) / (self.stats['xtab_std'] + 1e-6)
+            # Normalize Y_target
+            self.Y_target = (self.Y_target - self.stats['ytarget_mean']) / (self.stats['ytarget_std'] + 1e-6)
+            # Note: NaNs are preserved (arithmetic with NaN results in NaN)
+        
         self.encoder = encoder
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         
@@ -46,12 +60,14 @@ class MultimodalDataset(Dataset):
         # Assuming weights are in standard location or env var
         weights_path = os.environ.get("DINOV3_WEIGHTS", "/workspace/models/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth")
         
+        import dinov3
         self.model = torch.hub.load(
             repo_dir, 
             "dinov3_vits16", 
             source="local", 
-            weights=weights_path
+            pretrained=False
         )
+        self.model.load_state_dict(torch.load(weights_path, map_location=self.device, weights_only=True))
         self.model.eval().to(self.device)
         
     def __len__(self):
@@ -110,15 +126,52 @@ class MultimodalDataset(Dataset):
 def train_shared_gplvm(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     
-    # 1. Load Dataset
+    # 1. Load and Split Dataset by Patient ID
     print(f"Loading datasets from index: {args.manifest}")
-    dataset = MultimodalDataset(
-        args.manifest, 
+    full_df = pd.read_csv(args.manifest)
+    
+    # Identify columns for stats calculation
+    static_cols = ['HEIGHT', 'WEIGHT', 'BMI', 'AGE', 'POS', 'YEARS']
+    game_cols = ['AVG_MIN', 'AVG_PTS', 'AVG_REB', 'AVG_AST', 'AVG_PLUS_MINUS', 'TOT_MIN', 'TOT_PTS', 'TOT_REB', 'TOT_AST', 'TOT_PLUS_MINUS', 'GP']
+    clinical_cols = ['V_SCORE', 'PT_TEND', 'TT_TEND', 'HE', 'AT_THICK', 'SYMP', 'HEPRE', 'HEMID', 'HEPOST']
+    
+    xtab_cols = [c for c in static_cols + game_cols if c in full_df.columns]
+    ytarget_cols = [c for c in clinical_cols if c in full_df.columns]
+    
+    # Split by Patient
+    all_pids = full_df['ppt_key'].unique()
+    np.random.shuffle(all_pids)
+    split_idx = int(len(all_pids) * 0.8)
+    train_pids = all_pids[:split_idx]
+    val_pids = all_pids[split_idx:]
+    
+    train_df = full_df[full_df['ppt_key'].isin(train_pids)].reset_index(drop=True)
+    
+    # Compute Stats on TRAIN set only
+    print("Computing normalization stats on Training set...")
+    stats = {
+        'xtab_mean': train_df[xtab_cols].mean().values.astype(np.float32),
+        'xtab_std': train_df[xtab_cols].std().values.astype(np.float32),
+        'ytarget_mean': train_df[ytarget_cols].mean().values.astype(np.float32),
+        'ytarget_std': train_df[ytarget_cols].std().values.astype(np.float32),
+        'xtab_cols': xtab_cols,
+        'ytarget_cols': ytarget_cols
+    }
+    
+    print(f"Data Split: {len(train_pids)} Train Patients ({len(train_df)} frames), {len(val_pids)} Val Patients")
+    
+    train_dataset = MultimodalDataset(
+        train_df, 
         encoder=args.encoder,
-        device=args.device
+        device=args.device,
+        stats=stats
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
-    N = len(dataset)
+    
+    # We use the train_dataset length for scaling KL divergence
+    N = len(train_dataset)
+    
+    # DataLoader
+    dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     
     # Determine dimensions
     sample_batch = next(iter(dataloader))
@@ -175,12 +228,41 @@ def train_shared_gplvm(args):
             # Forward pass: mapped representations
             pred_img, pred_tab = model(X_batch)
             
-            # ELBO computes: -E[log_prob(Y|X)] + KL(q(X) || p(X))
-            # We negate it because PyTorch optimizers *minimize* loss
+            # --- Image Loss (Standard ELBO) ---
+            # Images are fully observed, so we use the standard GPyTorch ELBO
             loss_img = -mll_img(pred_img, Y1)
-            loss_tab = -mll_tab(pred_tab, Y2)
             
-            # Add regularization for the latent space X (MAP estimation)
+            # --- Tabular Loss (Manual Masking for NaNs) ---
+            # 1. Create Mask for observed values
+            mask_tab = ~torch.isnan(Y2)
+            
+            # 2. Fill NaNs with 0.0 to prevent NaN propagation in graph (masked out later)
+            Y2_filled = torch.nan_to_num(Y2, nan=0.0)
+            
+            # 3. Compute Marginal Log Likelihood manually for Tabular
+            # Get marginal distribution q(y|x) which includes noise
+            marginal_tab = likelihood_tab(pred_tab)
+            mu_tab = marginal_tab.mean
+            var_tab = marginal_tab.variance
+            
+            # Gaussian Log Prob: -0.5 * ( (y-mu)^2/var + log(var) + log(2pi) )
+            log_prob_tab = -0.5 * ((Y2_filled - mu_tab)**2 / var_tab + torch.log(var_tab) + math.log(2 * math.pi))
+            
+            # 4. Apply Mask and Sum (Negative Log Likelihood)
+            nll_tab = -(log_prob_tab * mask_tab).sum()
+            
+            # 5. Add KL Divergence for Tabular GP (Scaled by batch size)
+            # GPyTorch's VariationalELBO usually handles this, but since we are doing manual NLL,
+            # we must add the KL term manually.
+            # KL is computed over the inducing points (variational parameters), not the data.
+            # We scale it: KL_batch = KL_total * (batch_size / N)
+            kl_tab = model.gp_tab.variational_strategy.kl_divergence().sum()
+            kl_tab_scaled = kl_tab * (len(indices) / N)
+            
+            loss_tab = nll_tab + kl_tab_scaled
+            
+            # --- Latent Prior Regularization ---
+            # MAP estimation for X
             # This constrains X to stay close to the prior N(0, I)
             loss_prior = model.latent_prior_loss()
             
@@ -198,6 +280,11 @@ def train_shared_gplvm(args):
     torch.save(model.state_dict(), os.path.join(args.out_dir, "shared_gplvm_model.pth"))
     torch.save(likelihood_img.state_dict(), os.path.join(args.out_dir, "likelihood_img.pth"))
     torch.save(likelihood_tab.state_dict(), os.path.join(args.out_dir, "likelihood_tab.pth"))
+    
+    # Save Stats for Evaluation
+    stats_serializable = {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in stats.items()}
+    with open(os.path.join(args.out_dir, "y_stats.json"), "w") as f:
+        json.dump(stats_serializable, f)
     
     # Also save the optimized latent space X explicitly so we can plot it via UMAP/PCA later
     np.save(os.path.join(args.out_dir, "optimized_latent_X.npy"), model.X.detach().cpu().numpy())
